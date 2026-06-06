@@ -5,17 +5,14 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import time
 
-st.set_page_config(page_title="Custom Real-Time Scanner", layout="wide")
+st.set_page_config(page_title="Custom Breakout Engine", layout="wide")
 
 # App Header mimicking Chartink's custom dashboard layouts
-st.title("🦅 Real-Time Momentum Breakout Scanner (Chartink Engine)")
-st.write("Live auto-refreshing macro scanner tracking multi-timeframe structural confluences.")
+st.title("🦅 Momentum Breakout Scanner (Chartink EOD & Live Engine)")
+st.write("Tracks structural confluences during live hours and serves as an archive after market close.")
 
-# --- SIDEBAR INTERACTIVE FILTERS (Chartink Style Query Modifiers) ---
+# --- SIDEBAR INTERACTIVE FILTERS ---
 st.sidebar.header("🎯 Strategy Filter Settings")
-
-# Live Refresh Interval Toggle
-refresh_rate = st.sidebar.slider("🔄 Auto-Refresh Rate (Seconds)", min_value=30, max_value=300, value=60)
 
 # Strategy Threshold Toggles
 min_rsi_15m = st.sidebar.slider("📈 Minimum 15m RSI", min_value=50, max_value=80, value=60)
@@ -38,7 +35,7 @@ st.sidebar.info(f"Tracking Universe: **{len(all_tickers)} NSE Stocks**")
 # --- CORE PARALLEL DATA PROCESSING ENGINE ---
 def scan_single_ticker(ticker):
     try:
-        # Pull minimal data structure to keep thread execution under 0.5 seconds per stock
+        # Pull 5 days of data to look back across historical structures safely
         df = yf.download(ticker, period="5d", interval="15m", progress=False)
         if df.empty or len(df) < 60:
             return None
@@ -64,9 +61,10 @@ def scan_single_ticker(ticker):
         df['Hourly_RSI'] = ta.momentum.rsi(df['Close'], window=56)
         df['BB_Upper'] = ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2)
         
+        # Grab the last calculated data point (end of day if market is closed)
         last_row = df.iloc[-1]
         
-        # 3. Chartink Confluence Logic Evaluation
+        # 3. Strategy Confluence Logic Evaluation
         cond_ema = (last_row['Close'] > last_row['EMA_9']) and (last_row['EMA_9'] > last_row['EMA_21'])
         vol_multiple = float(last_row['Volume'] / last_row['Vol_SMA_20'])
         cond_vol = vol_multiple >= min_vol_spike
@@ -81,20 +79,16 @@ def scan_single_ticker(ticker):
                 "15m RSI": round(float(last_row['RSI_14']), 1),
                 "1h RSI": round(float(last_row['Hourly_RSI']), 1),
                 "Volume Multiple": round(vol_multiple, 2),
-                "Breakout Status": "🔥 Active Confluence Alert"
+                "Breakout Status": "✅ Breakout Confirmed"
             }
     except Exception:
         return None
     return None
 
-# --- RUNTIME LIVE MONITOR ---
-status_placeholder = st.empty()
-table_placeholder = st.empty()
-
-status_placeholder.info("⚙️ Running initial market scan... Connecting to live data engine.")
-
-# Continuous execution loop simulating Chartink live feeds
-while True:
+# --- RUN ENGINE MANUALLY FOR EOD REVIEWS ---
+if st.button("🔍 Run Full Market Scan / Load Archived Data", type="primary"):
+    st.info("Querying data cluster... Processing historical candle logs.")
+    
     triggered_stocks = []
     
     # Process the entire market using parallel processing threads
@@ -107,15 +101,20 @@ while True:
     # Update the visual elements on the dashboard dynamically
     if triggered_stocks:
         result_df = pd.DataFrame(triggered_stocks)
-        # Sort values with the highest institutional volume spikes at the very top
         result_df = result_df.sort_values(by="Volume Multiple", ascending=False)
         
-        status_placeholder.success(f"✅ Last Updated: {time.strftime('%H:%M:%S')} IST | Found {len(result_df)} Active Alerts")
-        table_placeholder.dataframe(result_df, use_container_width=True, hide_index=True)
-    else:
-        status_placeholder.warning(f"⏳ Last Updated: {time.strftime('%H:%M:%S')} IST | Scanning... No current stocks match all filters.")
-        table_placeholder.empty()
+        st.success(f"📊 Scan Completed! Found **{len(result_df)} stocks** that successfully executed confluences during the session.")
         
-    # Sleep interval block before triggering the next automatic full-market refresh loop
-    time.sleep(refresh_rate)
-    st.rerun()
+        # --- EXCEL / CSV DOWNLOAD BUTTON (Chartink Style Export) ---
+        csv_data = result_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Scan Results as CSV",
+            data=csv_data,
+            file_name=f"breakout_scan_{time.strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+        
+        # Display Data Table
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
+    else:
+        st.warning("Scan completed. No stocks met your precise confluence metrics during this session.")
