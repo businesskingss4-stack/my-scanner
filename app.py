@@ -1,27 +1,24 @@
 import streamlit as st
 import yfinance as yf
-import pandas_ta as ta
+import ta
 import pandas as pd
-from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Custom 15m Scanner", layout="wide")
 st.title("🚀 Custom 15-Minute Momentum Scanner")
 st.write("A free, cloud-hosted scanner running your custom multi-timeframe breakout strategy.")
 
-# Define your custom watchlist (Add your favorite NSE stocks here)
 watchlist = [
     "TATAMOTORS.NS", "RELIANCE.NS", "SBIN.NS", "TATASTEEL.NS", "INFY.NS",
     "ITC.NS", "TCS.NS", "BHARTIARTL.NS", "ICICIBANK.NS", "HDFCBANK.NS"
 ]
 
 if st.button("🔴 Run Real-Time Market Scan", type="primary"):
-    st.info("Scanning the market... This takes about 10-15 seconds for free servers.")
+    st.info("Scanning the market... Processing indicators.")
     
     triggered_stocks = []
     
     for ticker in watchlist:
         try:
-            # Fetch last 5 days of 15m data to safely calculate 1-hour and daily metrics
             df = yf.download(ticker, period="5d", interval="15m", progress=False)
             if df.empty:
                 continue
@@ -30,31 +27,27 @@ if st.button("🔴 Run Real-Time Market Scan", type="primary"):
                 df.columns = df.columns.get_level_values(0)
             df.columns = [str(col).strip() for col in df.columns]
             
-            # 1. Higher Timeframe (Daily) Calculation from Intraday Data
+            # 1. Daily Breakout Reference
             df['Trade_Date'] = df.index.date
-            daily_data = df.groupby('Trade_Date').agg({
-                'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-            })
-            daily_data['Daily_RSI'] = ta.rsi(daily_data['Close'], length=14)
+            daily_data = df.groupby('Trade_Date').agg({'High': 'max', 'Low': 'min', 'Close': 'last'})
+            daily_data['Daily_RSI'] = ta.momentum.rsi(daily_data['Close'], window=14)
             daily_data['Prev_Day_High'] = daily_data['High'].shift(1)
             
             df['Prev_Day_High'] = df['Trade_Date'].map(daily_data['Prev_Day_High'])
             df['Daily_RSI_Mapped'] = df['Trade_Date'].map(daily_data['Daily_RSI'])
             
-            # 2. Lower Timeframe (15-Minute) Indicators
-            df['EMA_9'] = ta.ema(df['Close'], length=9)
-            df['EMA_21'] = ta.ema(df['Close'], length=21)
-            df['Vol_SMA_20'] = ta.sma(df['Volume'], length=20)
-            df['RSI_14'] = ta.rsi(df['Close'], length=14)
-            df['Hourly_RSI'] = ta.rsi(df['Close'], length=56) # 4 * 14 = 1 Hour
+            # 2. 15-Minute Calculations (Using standard 'ta' library)
+            df['EMA_9'] = ta.trend.ema_indicator(df['Close'], window=9)
+            df['EMA_21'] = ta.trend.ema_indicator(df['Close'], window=21)
+            df['Vol_SMA_20'] = ta.trend.sma_indicator(df['Volume'], window=20)
+            df['RSI_14'] = ta.momentum.rsi(df['Close'], window=14)
+            df['Hourly_RSI'] = ta.momentum.rsi(df['Close'], window=56)
             
-            bbands = ta.bbands(df['Close'], length=20, std=2)
-            df['BB_Upper'] = bbands.iloc[:, 2]
+            df['BB_Upper'] = ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2)
             
-            # Extract the absolute last closed 15-minute candle values
             last_row = df.iloc[-1]
             
-            # 3. Chartink Logic Conditions
+            # 3. Confluence Rules
             cond_ema = (last_row['Close'] > last_row['EMA_9']) and (last_row['EMA_9'] > last_row['EMA_21'])
             cond_vol = last_row['Volume'] > (last_row['Vol_SMA_20'] * 2)
             cond_rsi = (last_row['RSI_14'] > 60) and (last_row['Hourly_RSI'] > 55) and (last_row['Daily_RSI_Mapped'] > 60)
@@ -72,7 +65,6 @@ if st.button("🔴 Run Real-Time Market Scan", type="primary"):
         except Exception as e:
             continue
             
-    # Display Results
     if triggered_stocks:
         result_df = pd.DataFrame(triggered_stocks)
         st.success(f"🔥 Found {len(result_df)} momentum alert entries!")
